@@ -5,79 +5,74 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
-import works.weave.socks.cart.cart.CartDAO;
-import works.weave.socks.cart.cart.CartResource;
 import works.weave.socks.cart.entities.Item;
 import works.weave.socks.cart.item.FoundItem;
-import works.weave.socks.cart.item.ItemDAO;
 import works.weave.socks.cart.item.ItemResource;
+import works.weave.socks.cart.repositories.ItemRepository;
 
 import java.util.List;
-import java.util.function.Supplier;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
 @RestController
-@RequestMapping(value = "/carts/{customerId:.*}/items")
+@RequestMapping(value = "/carts/{customerId:.*}")
 public class ItemsController {
-    private final Logger LOG = getLogger(getClass());
+  private final Logger LOG = getLogger(getClass());
 
-    @Autowired
-    private ItemDAO itemDAO;
-    @Autowired
-    private CartsController cartsController;
-    @Autowired
-    private CartDAO cartDAO;
+  @Autowired
+  ItemRepository itemRepository;
 
-    @ResponseStatus(HttpStatus.OK)
-    @RequestMapping(value = "/{itemId:.*}", produces = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.GET)
-    public Item get(@PathVariable String customerId, @PathVariable String itemId) {
-        return new FoundItem(() -> getItems(customerId), () -> new Item(itemId)).get();
+
+  @ResponseStatus(HttpStatus.OK)
+  @RequestMapping(produces = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.GET)
+  public Item get(@PathVariable int customerId) {
+    return new FoundItem(customerId, () -> itemRepository).getByItemId();
+  }
+
+  @ResponseStatus(HttpStatus.OK)
+  @RequestMapping(value = "/items/{itemId:.*}", produces = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.GET)
+  public Item get(@PathVariable int customerId, @PathVariable int itemId) {
+    return new FoundItem(customerId, () -> itemRepository).getByItemId(itemId);
+  }
+
+  @ResponseStatus(HttpStatus.OK)
+  @RequestMapping(value = "/items", produces = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.GET)
+  public List<Item> getItems(@PathVariable int customerId) {
+    return new FoundItem(customerId, () -> itemRepository).getByCustomerId();
+  }
+
+  @ResponseStatus(HttpStatus.CREATED)
+  @RequestMapping(value = "/items", consumes = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.POST)
+  public Item addToCart(@PathVariable int customerId, @RequestBody Item item) {
+    try {
+      FoundItem foundItem = new FoundItem(() -> item, () -> itemRepository);
+      updateItem(customerId, foundItem.get());
+      LOG.debug("Found item in cart. Incrementing for user: {}, {}", customerId, item);
+      return item;
+    } catch (NullPointerException e) {
+      LOG.debug("Did not find item. Creating item for user: {}, {}", customerId, item);
+      return new ItemResource(itemRepository, () -> item, customerId).create().get();
     }
+  }
 
-    @ResponseStatus(HttpStatus.OK)
-    @RequestMapping(produces = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.GET)
-    public List<Item> getItems(@PathVariable String customerId) {
-        return cartsController.get(customerId).contents();
-    }
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  @RequestMapping(value = "/items/{itemId:.*}", method = RequestMethod.DELETE)
+  public void removeItem(@PathVariable int customerId, @PathVariable int itemId) {
+    LOG.debug("Deleting item: {}", itemId);
+    new ItemResource(itemRepository, customerId, itemId).destroy().run();
+  }
 
-    @ResponseStatus(HttpStatus.CREATED)
-    @RequestMapping(consumes = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.POST)
-    public Item addToCart(@PathVariable String customerId, @RequestBody Item item) {
-        // If the item does not exist in the cart, create new one in the repository.
-        FoundItem foundItem = new FoundItem(() -> cartsController.get(customerId).contents(), () -> item);
-        if (!foundItem.hasItem()) {
-            Supplier<Item> newItem = new ItemResource(itemDAO, () -> item).create();
-            LOG.debug("Did not find item. Creating item for user: " + customerId + ", " + newItem.get());
-            new CartResource(cartDAO, customerId).contents().get().add(newItem).run();
-            return item;
-        } else {
-            Item newItem = new Item(foundItem.get(), foundItem.get().quantity() + 1);
-            LOG.debug("Found item in cart. Incrementing for user: " + customerId + ", " + newItem);
-            updateItem(customerId, newItem);
-            return newItem;
-        }
-    }
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  @RequestMapping(value = "/items", method = RequestMethod.DELETE)
+  public void removeItem(@PathVariable int customerId) {
+    LOG.debug("Deleting item wit cart_id: {}", customerId);
+    new ItemResource(itemRepository, customerId).destroyByCustomerId().run();
+  }
 
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    @RequestMapping(value = "/{itemId:.*}", method = RequestMethod.DELETE)
-    public void removeItem(@PathVariable String customerId, @PathVariable String itemId) {
-        FoundItem foundItem = new FoundItem(() -> getItems(customerId), () -> new Item(itemId));
-        Item item = foundItem.get();
-
-        LOG.debug("Removing item from cart: " + item);
-        new CartResource(cartDAO, customerId).contents().get().delete(() -> item).run();
-
-        LOG.debug("Removing item from repository: " + item);
-        new ItemResource(itemDAO, () -> item).destroy().run();
-    }
-
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    @RequestMapping(consumes = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.PATCH)
-    public void updateItem(@PathVariable String customerId, @RequestBody Item item) {
-        // Merge old and new items
-        ItemResource itemResource = new ItemResource(itemDAO, () -> get(customerId, item.itemId()));
-        LOG.debug("Merging item in cart for user: " + customerId + ", " + item);
-        itemResource.merge(item).run();
-    }
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  @RequestMapping(value = "/items", consumes = MediaType.APPLICATION_JSON_VALUE, method = RequestMethod.PATCH)
+  public void updateItem(@PathVariable int customerId, @RequestBody Item item) {
+    LOG.debug("Updating item in cart for user: {}, {}", customerId, item);
+    new ItemResource(itemRepository, () -> item, customerId).update().run();
+  }
 }
